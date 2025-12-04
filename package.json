@@ -2,11 +2,14 @@
   "name": "blockchain-finality-benchmark",
   "version": "2.0.0",
   "description": "Multi-chain finality benchmarking tool for NEAR, Ethereum, Arbitrum, Solana, Base, Optimism, Polygon, Avalanche, BSC, zkSync, Polygon zkEVM, Aptos, and Sui",
-  "main": "benchmark.js",
-  "type": "commonjs",
+  "main": "dist/benchmark.js",
+  "type": "module",
   "scripts": {
-    "start": "node benchmark.js",
-    "test": "node benchmark.js --network all --txs 5"
+    "build": "tsc",
+    "start": "npm run build && node dist/benchmark.js",
+    "test": "npm run build && node dist/benchmark.js --network all --txs 5",
+    "near": "npm run build && node dist/benchmark.js --network near --txs 10",
+    "clean": "rm -rf dist"
   },
   "keywords": [
     "blockchain",
@@ -40,6 +43,11 @@
     "dotenv": "^16.3.1",
     "ethers": "^6.9.0",
     "got": "^11.8.6",
-    "near-api-js": "^3.0.4"
+    "near-api-js": "7.0.0-rc.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

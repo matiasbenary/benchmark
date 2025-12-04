@@ -1,17 +1,30 @@
-const {
+import {
   Connection,
   Keypair,
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
-  LAMPORTS_PER_SOL
-} = require('@solana/web3.js');
-const { sleep, retry } = require('../utils/common');
+  LAMPORTS_PER_SOL,
+  PublicKey
+} from '@solana/web3.js';
+import bs58 from 'bs58';
+import { sleep, retry } from '../utils/common.js';
+import { TransactionResult } from '../utils/output.js';
+
+export interface SolanaConfig {
+  rpcUrl: string;
+  privateKey: string;
+  toAddress: string;
+  numTxs: number;
+  rate: number;
+  amount: string;
+  parallel: boolean;
+}
 
 /**
  * Parse Solana private key from various formats
  */
-function parsePrivateKey(privateKey) {
+function parsePrivateKey(privateKey: string): Keypair {
   try {
     // Try parsing as JSON array
     const secretKey = JSON.parse(privateKey);
@@ -19,7 +32,6 @@ function parsePrivateKey(privateKey) {
   } catch {
     // Try parsing as base58 string
     try {
-      const bs58 = require('bs58');
       const decoded = bs58.decode(privateKey);
       return Keypair.fromSecretKey(decoded);
     } catch {
@@ -31,13 +43,18 @@ function parsePrivateKey(privateKey) {
 /**
  * Send a single Solana transaction and measure finality time
  *
- * @param {Connection} connection - Solana connection
- * @param {Keypair} payer - Payer keypair
- * @param {PublicKey} toPublicKey - Recipient public key
- * @param {number} lamports - Amount in lamports
- * @returns {Object} Transaction result with timing data
+ * @param connection - Solana connection
+ * @param payer - Payer keypair
+ * @param toPublicKey - Recipient public key
+ * @param lamports - Amount in lamports
+ * @returns Transaction result with timing data
  */
-async function sendTransaction(connection, payer, toPublicKey, lamports) {
+async function sendTransaction(
+  connection: Connection,
+  payer: Keypair,
+  toPublicKey: PublicKey,
+  lamports: number
+): Promise<TransactionResult> {
   const sendTime = Date.now();
 
   try {
@@ -74,19 +91,20 @@ async function sendTransaction(connection, payer, toPublicKey, lamports) {
       sendTime,
       finalTime,
       latency,
-      blockTime: txDetails?.blockTime,
+      blockTime: txDetails?.blockTime || undefined,
       slot: txDetails?.slot,
       status: 'success'
     };
   } catch (error) {
     const finalTime = Date.now();
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       txId: null,
       sendTime,
       finalTime,
       latency: finalTime - sendTime,
       status: 'failed',
-      error: error.message
+      error: errorMessage
     };
   }
 }
@@ -94,7 +112,14 @@ async function sendTransaction(connection, payer, toPublicKey, lamports) {
 /**
  * Send transactions in parallel and wait for finality
  */
-async function sendTransactionsParallel(connection, payer, toPublicKey, lamports, numTxs, rate) {
+async function sendTransactionsParallel(
+  connection: Connection,
+  payer: Keypair,
+  toPublicKey: PublicKey,
+  lamports: number,
+  numTxs: number,
+  rate: number
+): Promise<TransactionResult[]> {
   const delayMs = rate > 0 ? 1000 / rate : 0;
 
   console.log('\nSending transactions...');
@@ -103,7 +128,14 @@ async function sendTransactionsParallel(connection, payer, toPublicKey, lamports
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
 
   // Send all transactions without waiting for finality
-  const txPromises = [];
+  const txPromises: Promise<{
+    signature: string | null;
+    sendTime: number;
+    index: number;
+    status: 'sent' | 'failed';
+    error?: string;
+  }>[] = [];
+  
   for (let i = 0; i < numTxs; i++) {
     const sendTime = Date.now();
 
@@ -129,15 +161,16 @@ async function sendTransactionsParallel(connection, payer, toPublicKey, lamports
           signature,
           sendTime,
           index: i,
-          status: 'sent'
+          status: 'sent' as const
         };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return {
           signature: null,
           sendTime,
           index: i,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })();
@@ -165,42 +198,43 @@ async function sendTransactionsParallel(connection, payer, toPublicKey, lamports
           sendTime,
           finalTime: Date.now(),
           latency: null,
-          status: 'failed',
+          status: 'failed' as const,
           error
         };
       }
 
       try {
-        await connection.confirmTransaction(signature, 'finalized');
+        await connection.confirmTransaction(signature!, 'finalized');
         const finalTime = Date.now();
         const latency = finalTime - sendTime;
 
         // Get transaction details
-        const txDetails = await connection.getTransaction(signature, {
+        const txDetails = await connection.getTransaction(signature!, {
           commitment: 'finalized'
         });
 
         console.log(`  [${index + 1}/${numTxs}] ✓ Finalized in ${(latency / 1000).toFixed(2)}s`);
 
         return {
-          txId: signature,
+          txId: signature!,
           sendTime,
           finalTime,
           latency,
-          blockTime: txDetails?.blockTime,
+          blockTime: txDetails?.blockTime || undefined,
           slot: txDetails?.slot,
-          status: 'success'
+          status: 'success' as const
         };
       } catch (error) {
         const finalTime = Date.now();
-        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${errorMessage}`);
         return {
-          txId: signature,
+          txId: signature!,
           sendTime,
           finalTime,
           latency: finalTime - sendTime,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })
@@ -212,17 +246,10 @@ async function sendTransactionsParallel(connection, payer, toPublicKey, lamports
 /**
  * Run Solana finality benchmark
  *
- * @param {Object} config - Configuration object
- * @param {string} config.rpcUrl - Solana RPC URL
- * @param {string} config.privateKey - Private key (JSON array or base58)
- * @param {string} config.toAddress - Recipient address (base58 public key)
- * @param {number} config.numTxs - Number of transactions to send
- * @param {number} config.rate - Transactions per second
- * @param {string} config.amount - Amount per transaction in SOL
- * @param {boolean} config.parallel - Whether to send transactions in parallel
- * @returns {Array} Array of transaction results
+ * @param config - Configuration object
+ * @returns Array of transaction results
  */
-async function runBenchmark(config) {
+export async function runBenchmark(config: SolanaConfig): Promise<TransactionResult[]> {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`Solana Finality Benchmark`);
   console.log(`${'='.repeat(60)}`);
@@ -240,17 +267,17 @@ async function runBenchmark(config) {
   const connection = new Connection(config.rpcUrl, 'finalized');
 
   // Parse keypair
-  let payer;
+  let payer: Keypair;
   try {
     payer = parsePrivateKey(config.privateKey);
   } catch (error) {
-    throw new Error(`Failed to parse private key: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to parse private key: ${errorMessage}`);
   }
 
   console.log(`Wallet address: ${payer.publicKey.toBase58()}`);
 
   // Parse recipient public key
-  const { PublicKey } = require('@solana/web3.js');
   const toPublicKey = new PublicKey(config.toAddress);
 
   // Check balance
@@ -275,7 +302,7 @@ async function runBenchmark(config) {
   console.log(`   Expected finality: ~13-15 seconds.\n`);
 
   // Execute in parallel or sequential mode
-  let results;
+  let results: TransactionResult[];
 
   if (config.parallel) {
     // Parallel mode: send all transactions, then wait for finality
@@ -305,20 +332,21 @@ async function runBenchmark(config) {
         results.push(result);
 
         if (result.status === 'success') {
-          console.log(`  ✓ Finalized in ${(result.latency / 1000).toFixed(2)}s`);
+          console.log(`  ✓ Finalized in ${(result.latency! / 1000).toFixed(2)}s`);
           console.log(`    Slot: ${result.slot}, TX: ${result.txId}`);
         } else {
           console.log(`  ✗ Failed: ${result.error}`);
         }
       } catch (error) {
-        console.log(`  ✗ Failed after retries: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  ✗ Failed after retries: ${errorMessage}`);
         results.push({
           txId: null,
           sendTime: Date.now(),
           finalTime: Date.now(),
           latency: null,
           status: 'failed',
-          error: error.message
+          error: errorMessage
         });
       }
 
@@ -332,7 +360,3 @@ async function runBenchmark(config) {
   console.log(`\n✓ Solana benchmark completed\n`);
   return results;
 }
-
-module.exports = {
-  runBenchmark
-};

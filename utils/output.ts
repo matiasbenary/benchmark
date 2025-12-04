@@ -2,14 +2,53 @@
  * Output formatting utilities for JSON and CSV export
  */
 
-const fs = require('fs');
-const path = require('path');
-const { calculateStats, formatStatsTable } = require('./stats');
+import fs from 'fs';
+import path from 'path';
+import { calculateStats, formatStatsTable, Stats, StatsTableRow } from './stats.js';
+
+export interface TransactionResult {
+  txId: string | null;
+  sendTime: number;
+  finalTime: number;
+  latency: number | null;
+  status: 'success' | 'failed';
+  error?: string;
+  blockHash?: string;
+  blockNumber?: bigint | number;
+  confirmations?: number;
+  miningLatency?: number;
+  version?: string;
+  gasUsed?: string;
+  blockTime?: number;
+  slot?: number;
+  checkpoint?: string;
+}
+
+export interface NetworkResult {
+  config: any;
+  stats: Stats;
+  results: TransactionResult[];
+}
+
+export interface NetworkResults {
+  [network: string]: NetworkResult;
+}
+
+export interface JSONOutput {
+  timestamp: string;
+  networks: {
+    [network: string]: {
+      config: any;
+      stats: Stats;
+      results: TransactionResult[];
+    };
+  };
+}
 
 /**
  * Convert results to CSV format
  */
-function resultsToCSV(results, network) {
+export function resultsToCSV(results: TransactionResult[], network: string): string {
   const headers = [
     'network',
     'tx_id',
@@ -48,7 +87,7 @@ function resultsToCSV(results, network) {
 /**
  * Write results to JSON file
  */
-async function writeJSON(filePath, data) {
+export async function writeJSON(filePath: string, data: JSONOutput): Promise<void> {
   const dir = path.dirname(filePath);
 
   // Create directory if it doesn't exist
@@ -64,7 +103,7 @@ async function writeJSON(filePath, data) {
 /**
  * Write results to CSV file
  */
-async function writeCSV(filePath, csvContent) {
+export async function writeCSV(filePath: string, csvContent: string): Promise<void> {
   const dir = path.dirname(filePath);
 
   // Create directory if it doesn't exist
@@ -79,7 +118,11 @@ async function writeCSV(filePath, csvContent) {
 /**
  * Append to CSV file (for streaming results from multiple networks)
  */
-async function appendCSV(filePath, csvContent, includeHeader = false) {
+export async function appendCSV(
+  filePath: string,
+  csvContent: string,
+  includeHeader: boolean = false
+): Promise<void> {
   const dir = path.dirname(filePath);
 
   // Create directory if it doesn't exist
@@ -100,7 +143,10 @@ async function appendCSV(filePath, csvContent, includeHeader = false) {
 /**
  * Save benchmark results to files
  */
-async function saveResults(networkResults, outputPath) {
+export async function saveResults(
+  networkResults: NetworkResults,
+  outputPath?: string
+): Promise<void> {
   if (!outputPath) {
     console.log('\nNo output path specified, skipping file export.');
     return;
@@ -110,7 +156,7 @@ async function saveResults(networkResults, outputPath) {
   const basePath = outputPath.replace(/\.(json|csv)$/, '');
 
   // Prepare JSON output
-  const jsonData = {
+  const jsonData: JSONOutput = {
     timestamp: new Date().toISOString(),
     networks: {}
   };
@@ -152,7 +198,7 @@ async function saveResults(networkResults, outputPath) {
 /**
  * Print results summary table to console
  */
-function printSummaryTable(summaryData) {
+export function printSummaryTable(summaryData: StatsTableRow[]): void {
   console.log('\n' + '='.repeat(120));
   console.log('FINALITY BENCHMARK SUMMARY');
   console.log('='.repeat(120));
@@ -195,13 +241,5 @@ function printSummaryTable(summaryData) {
   console.log('='.repeat(120) + '\n');
 }
 
-module.exports = {
-  resultsToCSV,
-  writeJSON,
-  writeCSV,
-  appendCSV,
-  saveResults,
-  printSummaryTable,
-  calculateStats,
-  formatStatsTable
-};
+// Re-export for convenience
+export { calculateStats, formatStatsTable };

@@ -1,16 +1,33 @@
-const { Aptos, AptosConfig, Network, Account, Ed25519PrivateKey } = require('@aptos-labs/ts-sdk');
-const { sleep, retry } = require('../utils/common');
+import { Aptos, AptosConfig as AptosSDKConfig, Network, Account, Ed25519PrivateKey } from '@aptos-labs/ts-sdk';
+import { sleep, retry } from '../utils/common.js';
+import { TransactionResult } from '../utils/output.js';
+
+export interface AptosBenchmarkConfig {
+  rpcUrl?: string;
+  network: string;
+  privateKey: string;
+  toAddress: string;
+  numTxs: number;
+  rate: number;
+  amount: string;
+  parallel: boolean;
+}
 
 /**
  * Send a single Aptos transaction and measure finality time
  *
- * @param {Aptos} client - Aptos client instance
- * @param {Account} account - Sender account
- * @param {string} toAddress - Recipient address
- * @param {string} amount - Amount in APT
- * @returns {Object} Transaction result with timing data
+ * @param client - Aptos client instance
+ * @param account - Sender account
+ * @param toAddress - Recipient address
+ * @param amount - Amount in APT
+ * @returns Transaction result with timing data
  */
-async function sendTransaction(client, account, toAddress, amount) {
+async function sendTransaction(
+  client: Aptos,
+  account: Account,
+  toAddress: string,
+  amount: string
+): Promise<TransactionResult> {
   const sendTime = Date.now();
 
   try {
@@ -57,13 +74,14 @@ async function sendTransaction(client, account, toAddress, amount) {
     };
   } catch (error) {
     const finalTime = Date.now();
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       txId: null,
       sendTime,
       finalTime,
       latency: finalTime - sendTime,
       status: 'failed',
-      error: error.message
+      error: errorMessage
     };
   }
 }
@@ -71,7 +89,14 @@ async function sendTransaction(client, account, toAddress, amount) {
 /**
  * Send transactions in parallel and wait for finality
  */
-async function sendTransactionsParallel(client, account, toAddress, amount, numTxs, rate) {
+async function sendTransactionsParallel(
+  client: Aptos,
+  account: Account,
+  toAddress: string,
+  amount: string,
+  numTxs: number,
+  rate: number
+): Promise<TransactionResult[]> {
   const delayMs = rate > 0 ? 1000 / rate : 0;
   const amountInOctas = Math.floor(parseFloat(amount) * 100_000_000);
 
@@ -79,7 +104,14 @@ async function sendTransactionsParallel(client, account, toAddress, amount, numT
 
   // Send all transactions without waiting for finality
   // Using coin::transfer (requires recipient account to exist)
-  const txPromises = [];
+  const txPromises: Promise<{
+    txHash: string | null;
+    sendTime: number;
+    index: number;
+    status: 'sent' | 'failed';
+    error?: string;
+  }>[] = [];
+  
   for (let i = 0; i < numTxs; i++) {
     const sendTime = Date.now();
 
@@ -105,16 +137,17 @@ async function sendTransactionsParallel(client, account, toAddress, amount, numT
           txHash: committedTxn.hash,
           sendTime,
           index: i,
-          status: 'sent'
+          status: 'sent' as const
         };
       } catch (error) {
-        console.log(`  [${i + 1}/${numTxs}] ✗ Failed to submit: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  [${i + 1}/${numTxs}] ✗ Failed to submit: ${errorMessage}`);
         return {
           txHash: null,
           sendTime,
           index: i,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })();
@@ -141,14 +174,14 @@ async function sendTransactionsParallel(client, account, toAddress, amount, numT
           sendTime,
           finalTime: Date.now(),
           latency: null,
-          status: 'failed',
+          status: 'failed' as const,
           error
         };
       }
 
       try {
         const executedTxn = await client.waitForTransaction({
-          transactionHash: txHash,
+          transactionHash: txHash!,
           options: {
             checkSuccess: true
           }
@@ -160,24 +193,25 @@ async function sendTransactionsParallel(client, account, toAddress, amount, numT
         console.log(`  [${index + 1}/${numTxs}] ✓ Finalized in ${(latency / 1000).toFixed(2)}s`);
 
         return {
-          txId: txHash,
+          txId: txHash!,
           sendTime,
           finalTime,
           latency,
           version: executedTxn.version,
           gasUsed: executedTxn.gas_used,
-          status: 'success'
+          status: 'success' as const
         };
       } catch (error) {
         const finalTime = Date.now();
-        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${errorMessage}`);
         return {
-          txId: txHash,
+          txId: txHash!,
           sendTime,
           finalTime,
           latency: finalTime - sendTime,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })
@@ -189,18 +223,10 @@ async function sendTransactionsParallel(client, account, toAddress, amount, numT
 /**
  * Run Aptos finality benchmark
  *
- * @param {Object} config - Configuration object
- * @param {string} config.rpcUrl - Aptos RPC URL (optional, defaults to network)
- * @param {string} config.network - Network: devnet, testnet, or mainnet
- * @param {string} config.privateKey - Private key (hex string)
- * @param {string} config.toAddress - Recipient address
- * @param {number} config.numTxs - Number of transactions to send
- * @param {number} config.rate - Transactions per second
- * @param {string} config.amount - Amount per transaction in APT
- * @param {boolean} config.parallel - Whether to send transactions in parallel
- * @returns {Array} Array of transaction results
+ * @param config - Configuration object
+ * @returns Array of transaction results
  */
-async function runBenchmark(config) {
+export async function runBenchmark(config: AptosBenchmarkConfig): Promise<TransactionResult[]> {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`Aptos Finality Benchmark`);
   console.log(`${'='.repeat(60)}`);
@@ -218,13 +244,13 @@ async function runBenchmark(config) {
   // Initialize Aptos client
   console.log('Connecting to Aptos...');
 
-  const networkMap = {
+  const networkMap: Record<string, Network> = {
     'devnet': Network.DEVNET,
     'testnet': Network.TESTNET,
     'mainnet': Network.MAINNET
   };
 
-  const aptosConfig = new AptosConfig({
+  const aptosConfig = new AptosSDKConfig({
     network: networkMap[config.network] || Network.DEVNET,
     ...(config.rpcUrl && { fullnode: config.rpcUrl })
   });
@@ -248,7 +274,7 @@ async function runBenchmark(config) {
     );
 
     if (accountResource) {
-      const balance = Number(accountResource.data.coin.value) / 100_000_000;
+      const balance = Number((accountResource.data as any).coin.value) / 100_000_000;
       console.log(`Account balance: ${balance} APT`);
 
       // Calculate cost estimate
@@ -264,13 +290,14 @@ async function runBenchmark(config) {
       }
     }
   } catch (error) {
-    console.warn(`Warning: Could not fetch balance: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`Warning: Could not fetch balance: ${errorMessage}`);
   }
 
   console.log(`⚠️  NOTE: Aptos has sub-second finality (~0.4-1s).\n`);
 
   // Execute in parallel or sequential mode
-  let results;
+  let results: TransactionResult[];
 
   if (config.parallel) {
     // Parallel mode: send all transactions, then wait for finality
@@ -300,21 +327,22 @@ async function runBenchmark(config) {
         results.push(result);
 
         if (result.status === 'success') {
-          console.log(`  ✓ Finalized in ${(result.latency / 1000).toFixed(2)}s`);
+          console.log(`  ✓ Finalized in ${(result.latency! / 1000).toFixed(2)}s`);
           console.log(`    Version: ${result.version}, Gas: ${result.gasUsed}`);
           console.log(`    TX: ${result.txId}`);
         } else {
           console.log(`  ✗ Failed: ${result.error}`);
         }
       } catch (error) {
-        console.log(`  ✗ Failed after retries: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  ✗ Failed after retries: ${errorMessage}`);
         results.push({
           txId: null,
           sendTime: Date.now(),
           finalTime: Date.now(),
           latency: null,
           status: 'failed',
-          error: error.message
+          error: errorMessage
         });
       }
 
@@ -328,7 +356,3 @@ async function runBenchmark(config) {
   console.log(`\n✓ Aptos benchmark completed\n`);
   return results;
 }
-
-module.exports = {
-  runBenchmark
-};

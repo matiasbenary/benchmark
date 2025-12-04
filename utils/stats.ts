@@ -2,10 +2,39 @@
  * Statistical utility functions for analyzing finality times
  */
 
+export interface Stats {
+  count: number;
+  failures: number;
+  average: number;
+  txPerSecond: number;
+  median: number;
+  stdDev: number;
+  min: number;
+  max: number;
+  p90: number;
+  p95: number;
+  p99: number;
+}
+
+export interface StatsTableRow {
+  Network: string;
+  Count: number;
+  Failures: number;
+  'Avg (ms)': number;
+  'Tx/s': number;
+  'Median (ms)': number;
+  'StdDev (ms)': number;
+  'Min (ms)': number;
+  'Max (ms)': number;
+  'P90 (ms)': number;
+  'P95 (ms)': number;
+  'P99 (ms)': number;
+}
+
 /**
  * Calculate average of an array of numbers
  */
-function average(arr) {
+function average(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((sum, val) => sum + val, 0) / arr.length;
 }
@@ -13,7 +42,7 @@ function average(arr) {
 /**
  * Calculate median of an array of numbers
  */
-function median(arr) {
+function median(arr: number[]): number {
   if (arr.length === 0) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -27,7 +56,7 @@ function median(arr) {
 /**
  * Calculate standard deviation
  */
-function standardDeviation(arr) {
+function standardDeviation(arr: number[]): number {
   if (arr.length === 0) return 0;
   const avg = average(arr);
   const squareDiffs = arr.map(value => Math.pow(value - avg, 2));
@@ -38,7 +67,7 @@ function standardDeviation(arr) {
 /**
  * Calculate percentile (0-100)
  */
-function percentile(arr, p) {
+function percentile(arr: number[], p: number): number {
   if (arr.length === 0) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
   const index = (p / 100) * (sorted.length - 1);
@@ -55,8 +84,8 @@ function percentile(arr, p) {
 /**
  * Calculate comprehensive statistics for an array of latencies
  */
-function calculateStats(latencies, failures = 0) {
-  const validLatencies = latencies.filter(l => l !== null && !isNaN(l));
+export function calculateStats(latencies: (number | null)[], failures: number = 0): Stats {
+  const validLatencies = latencies.filter((l): l is number => l !== null && !isNaN(l));
 
   if (validLatencies.length === 0) {
     return {
@@ -95,13 +124,13 @@ function calculateStats(latencies, failures = 0) {
 /**
  * Format statistics as a readable table row
  */
-function formatStatsTable(network, stats) {
+export function formatStatsTable(network: string, stats: Stats): StatsTableRow {
   return {
     Network: network,
-    'Count': stats.count,
-    'Failures': stats.failures,
-    'ms/tx': stats.average,
-    'tx/s': stats.txPerSecond,
+    Count: stats.count,
+    Failures: stats.failures,
+    'Avg (ms)': stats.average,
+    'Tx/s': stats.txPerSecond,
     'Median (ms)': stats.median,
     'StdDev (ms)': stats.stdDev,
     'Min (ms)': stats.min,
@@ -111,12 +140,3 @@ function formatStatsTable(network, stats) {
     'P99 (ms)': stats.p99
   };
 }
-
-module.exports = {
-  average,
-  median,
-  standardDeviation,
-  percentile,
-  calculateStats,
-  formatStatsTable
-};

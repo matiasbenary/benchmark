@@ -11,20 +11,52 @@
  *   node benchmark.js --network all --txs 10
  */
 
-require('dotenv').config();
-const { Command } = require('commander');
-const { calculateStats, formatStatsTable } = require('./utils/stats');
-const { saveResults, printSummaryTable } = require('./utils/output');
+import { config as dotenvConfig } from 'dotenv';
+import { Command } from 'commander';
+import * as readline from 'readline';
+import { calculateStats, formatStatsTable, StatsTableRow } from './utils/stats.js';
+import { saveResults, printSummaryTable, NetworkResults, TransactionResult } from './utils/output.js';
 
 // Import network modules
-const nearModule = require('./lib/near');
-const solanaModule = require('./lib/solana');
-const aptosModule = require('./lib/aptos');
-const suiModule = require('./lib/sui');
-const evmModule = require('./lib/evm');
+import * as nearModule from './lib/near.js';
+import * as solanaModule from './lib/solana.js';
+import * as aptosModule from './lib/aptos.js';
+import * as suiModule from './lib/sui.js';
+import * as evmModule from './lib/evm.js';
+
+dotenvConfig();
+
+interface NetworkModule {
+  runBenchmark: (...args: any[]) => Promise<TransactionResult[]>;
+}
+
+interface EVMNetworkInfo {
+  type: 'evm';
+  module: NetworkModule;
+  displayName: string;
+  blockTime: number;
+  defaultConfirmations: number;
+  defaultRpcUrl: string;
+  defaultAmount: string;
+}
+
+interface CustomNetworkInfo {
+  type: 'custom';
+  module: NetworkModule;
+  envPrefix: string;
+  requiredEnvVars: string[];
+  optionalEnvVars?: Record<string, string>;
+  customConfig: (env: NodeJS.ProcessEnv) => any;
+}
+
+type NetworkInfo = EVMNetworkInfo | CustomNetworkInfo;
+
+interface NetworksRegistry {
+  [key: string]: NetworkInfo;
+}
 
 // Network registry with configurations
-const NETWORKS = {
+const NETWORKS: NetworksRegistry = {
   near: {
     type: 'custom',
     module: nearModule,
@@ -33,7 +65,7 @@ const NETWORKS = {
     optionalEnvVars: { receiverId: 'RECEIVER_ID', amount: '0.01' },
     customConfig: (env) => ({
       networkId: env.NEAR_NETWORK_ID || 'testnet',
-      nodeUrl: env.NEAR_RPC_URL || 'https://near-testnet.api.pagoda.co/rpc/v1/',
+      nodeUrl: env.NEAR_RPC_URL,
       accountId: env.NEAR_ACCOUNT_ID,
       privateKey: env.NEAR_PRIVATE_KEY,
       receiverId: env.NEAR_RECEIVER_ID || env.NEAR_ACCOUNT_ID,
@@ -182,8 +214,8 @@ const options = program.opts();
 /**
  * Load configuration from environment variables
  */
-function loadConfig() {
-  const config = {};
+function loadConfig(): Record<string, any> {
+  const config: Record<string, any> = {};
 
   // EVM defaults
   const evmDefaults = {
@@ -212,11 +244,11 @@ function loadConfig() {
 /**
  * Validate configuration for a specific network
  */
-function validateConfig(network, config) {
+function validateConfig(network: string, config: any): string[] {
   const networkInfo = NETWORKS[network];
   if (!networkInfo) return ['Unknown network'];
 
-  const missing = [];
+  const missing: string[] = [];
 
   if (networkInfo.type === 'evm') {
     if (!config.privateKey) {
@@ -240,46 +272,15 @@ function validateConfig(network, config) {
 }
 
 /**
- * Show safety warning and get user confirmation
- */
-async function showWarningAndConfirm(networks, numTxs) {
-  console.log('\n' + '='.repeat(80));
-  console.log('⚠️  WARNING: REAL TRANSACTIONS WITH REAL FEES');
-  console.log('='.repeat(80));
-  console.log(`You are about to send ${numTxs} transaction(s) per network.`);
-  console.log(`Networks: ${networks.join(', ')}`);
-  console.log('\nThis will incur REAL costs (gas fees + transfer amounts).');
-  console.log('Make sure you are using TESTNET accounts with small amounts.');
-  console.log('\nNEVER use mainnet private keys unless you understand the costs!');
-  console.log('='.repeat(80) + '\n');
-
-  if (!options.confirm) {
-    console.log('Skipping confirmation (--no-confirm flag set)\n');
-    return;
-  }
-
-  const readline = require('readline').createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-
-  return new Promise((resolve) => {
-    readline.question('Type "yes" to proceed: ', (answer) => {
-      readline.close();
-      if (answer.toLowerCase() !== 'yes') {
-        console.log('Aborted.');
-        process.exit(0);
-      }
-      console.log('');
-      resolve();
-    });
-  });
-}
-
-/**
  * Run benchmark for a single network
  */
-async function runNetworkBenchmark(network, config, numTxs, rate, parallel = false) {
+async function runNetworkBenchmark(
+  network: string,
+  config: any,
+  numTxs: number,
+  rate: number,
+  parallel: boolean = false
+) {
   const networkInfo = NETWORKS[network];
   if (!networkInfo) {
     throw new Error(`Unknown network: ${network}`);
@@ -292,7 +293,7 @@ async function runNetworkBenchmark(network, config, numTxs, rate, parallel = fal
     parallel
   };
 
-  let results;
+  let results: TransactionResult[];
   if (networkInfo.type === 'evm') {
     results = await networkInfo.module.runBenchmark(
       networkConfig,
@@ -321,7 +322,7 @@ async function runNetworkBenchmark(network, config, numTxs, rate, parallel = fal
 /**
  * Main function
  */
-async function main() {
+async function main(): Promise<void> {
   const numTxs = parseInt(options.txs);
   const rate = parseFloat(options.rate);
   const network = options.network.toLowerCase();
@@ -342,7 +343,7 @@ async function main() {
   const config = loadConfig();
 
   // Validate configuration for selected networks
-  const configErrors = {};
+  const configErrors: Record<string, string[]> = {};
   for (const net of networksToRun) {
     const missing = validateConfig(net, config[net]);
     if (missing.length > 0) {
@@ -361,9 +362,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Show warning and get confirmation
-  await showWarningAndConfirm(networksToRun, numTxs);
-
   console.log('Starting benchmark...\n');
   console.log(`Configuration:`);
   console.log(`  Networks: ${networksToRun.join(', ')}`);
@@ -373,8 +371,8 @@ async function main() {
   console.log(`  Output: ${options.out || 'none'}\n`);
 
   // Run benchmarks
-  const networkResults = {};
-  const summaryData = [];
+  const networkResults: NetworkResults = {};
+  const summaryData: StatsTableRow[] = [];
 
   for (const net of networksToRun) {
     try {
@@ -384,8 +382,9 @@ async function main() {
       // Add to summary
       summaryData.push(formatStatsTable(net.toUpperCase(), result.stats));
     } catch (error) {
-      console.error(`\n❌ Error running ${net} benchmark: ${error.message}\n`);
-      if (error.stack) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`\n❌ Error running ${net} benchmark: ${errorMessage}\n`);
+      if (error instanceof Error && error.stack) {
         console.error(error.stack);
       }
     }
@@ -401,7 +400,8 @@ async function main() {
     try {
       await saveResults(networkResults, options.out);
     } catch (error) {
-      console.error(`\n❌ Error saving results: ${error.message}\n`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`\n❌ Error saving results: ${errorMessage}\n`);
     }
   }
 
@@ -409,14 +409,13 @@ async function main() {
 }
 
 // Run main function
-if (require.main === module) {
-  main().catch(error => {
-    console.error('\n❌ Fatal error:', error.message);
-    if (error.stack) {
-      console.error(error.stack);
-    }
-    process.exit(1);
-  });
-}
+main().catch(error => {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  console.error('\n❌ Fatal error:', errorMessage);
+  if (error instanceof Error && error.stack) {
+    console.error(error.stack);
+  }
+  process.exit(1);
+});
 
-module.exports = { main };
+export { main };

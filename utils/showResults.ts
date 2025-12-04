@@ -1,15 +1,32 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const { calculateStats } = require('./stats');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { calculateStats, Stats } from './stats.js';
 
-function readCSV(filePath) {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+interface NetworkStats {
+  [network: string]: Stats;
+}
+
+interface CSVNetworkData {
+  latencies: number[];
+  failures: number;
+}
+
+interface JSONNetworkData {
+  stats: Stats;
+}
+
+function readCSV(filePath: string): NetworkStats {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n');
   const headers = lines[0].split(',');
 
-  const results = {};
+  const results: { [network: string]: CSVNetworkData } = {};
 
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].split(',');
@@ -31,7 +48,7 @@ function readCSV(filePath) {
     }
   }
 
-  const stats = {};
+  const stats: NetworkStats = {};
   for (const [network, data] of Object.entries(results)) {
     stats[network] = calculateStats(data.latencies, data.failures);
   }
@@ -39,20 +56,20 @@ function readCSV(filePath) {
   return stats;
 }
 
-function readJSON(filePath) {
+function readJSON(filePath: string): NetworkStats {
   const content = fs.readFileSync(filePath, 'utf-8');
   const data = JSON.parse(content);
 
-  const stats = {};
+  const stats: NetworkStats = {};
 
   for (const [network, networkData] of Object.entries(data.networks)) {
-    stats[network] = networkData.stats;
+    stats[network] = (networkData as JSONNetworkData).stats;
   }
 
   return stats;
 }
 
-function displayTable(stats, fileName) {
+function displayTable(stats: NetworkStats, fileName: string): void {
   const separator = '='.repeat(120);
   const lineSeparator = '-'.repeat(120);
 
@@ -89,7 +106,7 @@ function displayTable(stats, fileName) {
   console.log('');
 }
 
-function listAvailableFiles() {
+function listAvailableFiles(): string[] {
   const resultsDir = path.join(__dirname, 'results');
 
   if (!fs.existsSync(resultsDir)) {
@@ -106,7 +123,7 @@ function listAvailableFiles() {
 }
 
 // Main
-function main() {
+function main(): void {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
@@ -156,7 +173,7 @@ function main() {
   const ext = path.extname(filePath).toLowerCase();
   const fileName = path.basename(filePath);
 
-  let stats;
+  let stats: NetworkStats;
 
   if (ext === '.json') {
     stats = readJSON(filePath);

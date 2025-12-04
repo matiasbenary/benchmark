@@ -1,18 +1,36 @@
-const { SuiClient, getFullnodeUrl } = require('@mysten/sui.js/client');
-const { Ed25519Keypair } = require('@mysten/sui.js/keypairs/ed25519');
-const { TransactionBlock } = require('@mysten/sui.js/transactions');
-const { sleep, retry } = require('../utils/common');
+import { SuiClient, getFullnodeUrl } from '@mysten/sui.js/client';
+import { Ed25519Keypair } from '@mysten/sui.js/keypairs/ed25519';
+import { TransactionBlock } from '@mysten/sui.js/transactions';
+import { decodeSuiPrivateKey } from '@mysten/sui.js/cryptography';
+import { sleep, retry } from '../utils/common.js';
+import { TransactionResult } from '../utils/output.js';
+
+export interface SuiConfig {
+  rpcUrl?: string;
+  network: string;
+  privateKey: string;
+  toAddress: string;
+  numTxs: number;
+  rate: number;
+  amount: string;
+  parallel: boolean;
+}
 
 /**
  * Send a single Sui transaction and measure finality time
  *
- * @param {SuiClient} client - Sui client instance
- * @param {Ed25519Keypair} keypair - Sender keypair
- * @param {string} toAddress - Recipient address
- * @param {string} amount - Amount in SUI
- * @returns {Object} Transaction result with timing data
+ * @param client - Sui client instance
+ * @param keypair - Sender keypair
+ * @param toAddress - Recipient address
+ * @param amount - Amount in SUI
+ * @returns Transaction result with timing data
  */
-async function sendTransaction(client, keypair, toAddress, amount) {
+async function sendTransaction(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  toAddress: string,
+  amount: string
+): Promise<TransactionResult> {
   const sendTime = Date.now();
 
   try {
@@ -50,18 +68,19 @@ async function sendTransaction(client, keypair, toAddress, amount) {
       sendTime,
       finalTime,
       latency,
-      checkpoint: result.checkpoint,
+      checkpoint: result.checkpoint || undefined,
       status: 'success'
     };
   } catch (error) {
     const finalTime = Date.now();
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       txId: null,
       sendTime,
       finalTime,
       latency: finalTime - sendTime,
       status: 'failed',
-      error: error.message
+      error: errorMessage
     };
   }
 }
@@ -69,14 +88,29 @@ async function sendTransaction(client, keypair, toAddress, amount) {
 /**
  * Send transactions in parallel and wait for finality
  */
-async function sendTransactionsParallel(client, keypair, toAddress, amount, numTxs, rate) {
+async function sendTransactionsParallel(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  toAddress: string,
+  amount: string,
+  numTxs: number,
+  rate: number
+): Promise<TransactionResult[]> {
   const delayMs = rate > 0 ? 1000 / rate : 0;
   const amountInMist = Math.floor(parseFloat(amount) * 1_000_000_000);
 
   console.log('\nSending transactions with WaitForLocalExecution...');
 
   // Send all transactions with WaitForLocalExecution for finality
-  const txPromises = [];
+  const txPromises: Promise<{
+    digest: string | null;
+    checkpoint: string | undefined;
+    sendTime: number;
+    index: number;
+    status: 'sent' | 'failed';
+    error?: string;
+  }>[] = [];
+  
   for (let i = 0; i < numTxs; i++) {
     const sendTime = Date.now();
 
@@ -97,18 +131,20 @@ async function sendTransactionsParallel(client, keypair, toAddress, amount, numT
 
         return {
           digest: result.digest,
-          checkpoint: result.checkpoint,
+          checkpoint: result.checkpoint || undefined,
           sendTime,
           index: i,
-          status: 'sent'
+          status: 'sent' as const
         };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return {
           digest: null,
+          checkpoint: undefined,
           sendTime,
           index: i,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })();
@@ -136,14 +172,14 @@ async function sendTransactionsParallel(client, keypair, toAddress, amount, numT
           sendTime,
           finalTime: Date.now(),
           latency: null,
-          status: 'failed',
+          status: 'failed' as const,
           error
         };
       }
 
       try {
         await client.waitForTransactionBlock({
-          digest: digest,
+          digest: digest!,
           options: {
             showEffects: true
           }
@@ -155,23 +191,24 @@ async function sendTransactionsParallel(client, keypair, toAddress, amount, numT
         console.log(`  [${index + 1}/${numTxs}] ✓ Finalized in ${(latency / 1000).toFixed(2)}s`);
 
         return {
-          txId: digest,
+          txId: digest!,
           sendTime,
           finalTime,
           latency,
           checkpoint,
-          status: 'success'
+          status: 'success' as const
         };
       } catch (error) {
         const finalTime = Date.now();
-        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${errorMessage}`);
         return {
-          txId: digest,
+          txId: digest!,
           sendTime,
           finalTime,
           latency: finalTime - sendTime,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })
@@ -183,18 +220,10 @@ async function sendTransactionsParallel(client, keypair, toAddress, amount, numT
 /**
  * Run Sui finality benchmark
  *
- * @param {Object} config - Configuration object
- * @param {string} config.rpcUrl - Sui RPC URL (optional, defaults to network)
- * @param {string} config.network - Network: devnet, testnet, or mainnet
- * @param {string} config.privateKey - Private key (base64 or hex string)
- * @param {string} config.toAddress - Recipient address
- * @param {number} config.numTxs - Number of transactions to send
- * @param {number} config.rate - Transactions per second
- * @param {string} config.amount - Amount per transaction in SUI
- * @param {boolean} config.parallel - Whether to send transactions in parallel
- * @returns {Array} Array of transaction results
+ * @param config - Configuration object
+ * @returns Array of transaction results
  */
-async function runBenchmark(config) {
+export async function runBenchmark(config: SuiConfig): Promise<TransactionResult[]> {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`Sui Finality Benchmark`);
   console.log(`${'='.repeat(60)}`);
@@ -212,26 +241,24 @@ async function runBenchmark(config) {
   // Initialize Sui client
   console.log('Connecting to Sui...');
 
-  const rpcUrl = config.rpcUrl || getFullnodeUrl(config.network || 'devnet');
+  const networkParam = config.network || 'devnet';
+  const validNetworks = ['devnet', 'mainnet', 'testnet', 'localnet'] as const;
+  const network = validNetworks.includes(networkParam as any) 
+    ? (networkParam as 'devnet' | 'mainnet' | 'testnet' | 'localnet')
+    : 'devnet';
+    
+  const rpcUrl = config.rpcUrl || getFullnodeUrl(network);
   const client = new SuiClient({ url: rpcUrl });
 
   // Create keypair from private key
-  // Support multiple formats: bech32, base64, hex
-  let keypair;
+  let keypair: Ed25519Keypair;
   try {
-    // Try using Ed25519Keypair.fromSecretKey which handles bech32 format (suiprivkey1...)
     const privateKey = config.privateKey.trim();
 
     // Method 1: Try as bech32 encoded key (most common from Sui CLI)
-    // This handles formats like "suiprivkey1..." or just the bech32 string
     if (!privateKey.startsWith('0x') && !privateKey.includes(':')) {
       try {
-        // The SDK's fromSecretKey expects just the secret bytes, not bech32
-        // We need to decode bech32 manually or use a different method
-        // Try treating it as a Sui bech32 private key by using decodeSuiPrivateKey
-        const { decodeSuiPrivateKey } = require('@mysten/sui.js/cryptography');
-
-        // Add prefix if missing (some tools output just the bech32 part without prefix)
+        // Add prefix if missing
         const fullKey = privateKey.startsWith('suiprivkey')
           ? privateKey
           : 'suiprivkey' + privateKey;
@@ -258,13 +285,12 @@ async function runBenchmark(config) {
     else if (privateKey.startsWith('0x')) {
       const buffer = Buffer.from(privateKey.slice(2), 'hex');
       keypair = Ed25519Keypair.fromSecretKey(buffer);
-    }
-
-    if (!keypair) {
+    } else {
       throw new Error('Could not parse private key with any supported format');
     }
   } catch (error) {
-    throw new Error(`Invalid private key format: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid private key format: ${errorMessage}`);
   }
 
   const address = keypair.getPublicKey().toSuiAddress();
@@ -291,13 +317,14 @@ async function runBenchmark(config) {
       throw new Error(`Insufficient balance. Need ~${totalCost} SUI, have ${balanceSui} SUI`);
     }
   } catch (error) {
-    console.warn(`Warning: Could not fetch balance: ${error.message}`);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`Warning: Could not fetch balance: ${errorMessage}`);
   }
 
   console.log(`⚠️  NOTE: Sui has sub-second finality (~0.4-0.6s).\n`);
 
   // Execute in parallel or sequential mode
-  let results;
+  let results: TransactionResult[];
 
   if (config.parallel) {
     // Parallel mode: send all transactions, then wait for finality
@@ -327,21 +354,22 @@ async function runBenchmark(config) {
         results.push(result);
 
         if (result.status === 'success') {
-          console.log(`  ✓ Finalized in ${(result.latency / 1000).toFixed(2)}s`);
+          console.log(`  ✓ Finalized in ${(result.latency! / 1000).toFixed(2)}s`);
           console.log(`    Checkpoint: ${result.checkpoint || 'N/A'}`);
           console.log(`    TX: ${result.txId}`);
         } else {
           console.log(`  ✗ Failed: ${result.error}`);
         }
       } catch (error) {
-        console.log(`  ✗ Failed after retries: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  ✗ Failed after retries: ${errorMessage}`);
         results.push({
           txId: null,
           sendTime: Date.now(),
           finalTime: Date.now(),
           latency: null,
           status: 'failed',
-          error: error.message
+          error: errorMessage
         });
       }
 
@@ -355,7 +383,3 @@ async function runBenchmark(config) {
   console.log(`\n✓ Sui benchmark completed\n`);
   return results;
 }
-
-module.exports = {
-  runBenchmark
-};

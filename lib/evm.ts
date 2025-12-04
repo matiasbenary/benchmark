@@ -1,16 +1,33 @@
-const { ethers } = require('ethers');
-const { sleep, retry } = require('../utils/common');
+import { ethers } from 'ethers';
+import { sleep, retry } from '../utils/common.js';
+import { TransactionResult } from '../utils/output.js';
+
+export interface EVMConfig {
+  rpcUrl: string;
+  privateKey: string;
+  toAddress: string;
+  numTxs: number;
+  rate: number;
+  amount: string;
+  confirmations: number;
+  parallel: boolean;
+}
 
 /**
  * Send a single EVM transaction and measure finality time
  *
- * @param {ethers.Wallet} wallet - Ethers wallet instance
- * @param {string} toAddress - Recipient address
- * @param {string} amount - Amount in native currency
- * @param {number} confirmations - Number of confirmations to wait for
- * @returns {Object} Transaction result with timing data
+ * @param wallet - Ethers wallet instance
+ * @param toAddress - Recipient address
+ * @param amount - Amount in native currency
+ * @param confirmations - Number of confirmations to wait for
+ * @returns Transaction result with timing data
  */
-async function sendTransaction(wallet, toAddress, amount, confirmations) {
+async function sendTransaction(
+  wallet: ethers.Wallet,
+  toAddress: string,
+  amount: string,
+  confirmations: number
+): Promise<TransactionResult> {
   const sendTime = Date.now();
 
   try {
@@ -38,18 +55,19 @@ async function sendTransaction(wallet, toAddress, amount, confirmations) {
       latency,
       miningLatency,
       confirmations,
-      blockNumber: finalReceipt.blockNumber,
+      blockNumber: finalReceipt?.blockNumber,
       status: 'success'
     };
   } catch (error) {
     const finalTime = Date.now();
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       txId: null,
       sendTime,
       finalTime,
       latency: finalTime - sendTime,
       status: 'failed',
-      error: error.message
+      error: errorMessage
     };
   }
 }
@@ -57,15 +75,22 @@ async function sendTransaction(wallet, toAddress, amount, confirmations) {
 /**
  * Send transactions in parallel and wait for finality
  *
- * @param {ethers.Wallet} wallet - Ethers wallet instance
- * @param {string} toAddress - Recipient address
- * @param {string} amount - Amount in native currency
- * @param {number} confirmations - Number of confirmations to wait for
- * @param {number} numTxs - Number of transactions to send
- * @param {number} rate - Transactions per second (for sending phase)
- * @returns {Array} Transaction results with timing data
+ * @param wallet - Ethers wallet instance
+ * @param toAddress - Recipient address
+ * @param amount - Amount in native currency
+ * @param confirmations - Number of confirmations to wait for
+ * @param numTxs - Number of transactions to send
+ * @param rate - Transactions per second (for sending phase)
+ * @returns Transaction results with timing data
  */
-async function sendTransactionsParallel(wallet, toAddress, amount, confirmations, numTxs, rate) {
+async function sendTransactionsParallel(
+  wallet: ethers.Wallet,
+  toAddress: string,
+  amount: string,
+  confirmations: number,
+  numTxs: number,
+  rate: number
+): Promise<TransactionResult[]> {
   const delayMs = rate > 0 ? 1000 / rate : 0;
 
   // Get current nonce
@@ -73,8 +98,8 @@ async function sendTransactionsParallel(wallet, toAddress, amount, confirmations
   console.log(`Starting nonce: ${startNonce}\n`);
 
   // Prepare all transactions with sequential nonces
-  const txPromises = [];
-  const sendTimes = [];
+  const txPromises: Promise<{ tx: ethers.TransactionResponse; sendTime: number; index: number }>[] = [];
+  const sendTimes: number[] = [];
 
   console.log('Sending transactions...');
   for (let i = 0; i < numTxs; i++) {
@@ -127,19 +152,20 @@ async function sendTransactionsParallel(wallet, toAddress, amount, confirmations
           latency,
           miningLatency,
           confirmations,
-          blockNumber: finalReceipt.blockNumber,
-          status: 'success'
+          blockNumber: finalReceipt?.blockNumber,
+          status: 'success' as const
         };
       } catch (error) {
         const finalTime = Date.now();
-        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  [${index + 1}/${numTxs}] ✗ Failed: ${errorMessage}`);
         return {
           txId: tx.hash,
           sendTime,
           finalTime,
           latency: finalTime - sendTime,
-          status: 'failed',
-          error: error.message
+          status: 'failed' as const,
+          error: errorMessage
         };
       }
     })
@@ -151,20 +177,16 @@ async function sendTransactionsParallel(wallet, toAddress, amount, confirmations
 /**
  * Run EVM finality benchmark
  *
- * @param {Object} config - Configuration object
- * @param {string} config.rpcUrl - EVM RPC URL
- * @param {string} config.privateKey - Private key for the wallet
- * @param {string} config.toAddress - Recipient address
- * @param {number} config.numTxs - Number of transactions to send
- * @param {number} config.rate - Transactions per second
- * @param {string} config.amount - Amount per transaction
- * @param {number} config.confirmations - Number of confirmations for finality
- * @param {boolean} config.parallel - Whether to send transactions in parallel
- * @param {string} networkName - Display name of the network
- * @param {number} blockTime - Average block time in seconds (for display only)
- * @returns {Array} Array of transaction results
+ * @param config - Configuration object
+ * @param networkName - Display name of the network
+ * @param blockTime - Average block time in seconds (for display only)
+ * @returns Array of transaction results
  */
-async function runBenchmark(config, networkName, blockTime = null) {
+export async function runBenchmark(
+  config: EVMConfig,
+  networkName: string,
+  blockTime: number | null = null
+): Promise<TransactionResult[]> {
   const confirmations = config.confirmations;
 
   console.log(`\n${'='.repeat(60)}`);
@@ -193,7 +215,7 @@ async function runBenchmark(config, networkName, blockTime = null) {
 
   // Get current gas price
   const feeData = await provider.getFeeData();
-  const gasPrice = feeData.gasPrice;
+  const gasPrice = feeData.gasPrice || 0n;
   console.log(`Current gas price: ${ethers.formatUnits(gasPrice, 'gwei')} gwei`);
 
   // Calculate cost estimate
@@ -219,7 +241,7 @@ async function runBenchmark(config, networkName, blockTime = null) {
   }
 
   // Execute in parallel or sequential mode
-  let results;
+  let results: TransactionResult[];
 
   if (config.parallel) {
     // Parallel mode: send all transactions, then wait for finality
@@ -249,21 +271,22 @@ async function runBenchmark(config, networkName, blockTime = null) {
         results.push(result);
 
         if (result.status === 'success') {
-          console.log(`  ✓ Finalized in ${(result.latency / 1000).toFixed(2)}s`);
-          console.log(`    Mined in ${(result.miningLatency / 1000).toFixed(2)}s, ${confirmations} confirmations in ${((result.latency - result.miningLatency) / 1000).toFixed(2)}s`);
+          console.log(`  ✓ Finalized in ${(result.latency! / 1000).toFixed(2)}s`);
+          console.log(`    Mined in ${(result.miningLatency! / 1000).toFixed(2)}s, ${confirmations} confirmations in ${((result.latency! - result.miningLatency!) / 1000).toFixed(2)}s`);
           console.log(`    Block: ${result.blockNumber}, TX: ${result.txId}`);
         } else {
           console.log(`  ✗ Failed: ${result.error}`);
         }
       } catch (error) {
-        console.log(`  ✗ Failed after retries: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(`  ✗ Failed after retries: ${errorMessage}`);
         results.push({
           txId: null,
           sendTime: Date.now(),
           finalTime: Date.now(),
           latency: null,
           status: 'failed',
-          error: error.message
+          error: errorMessage
         });
       }
 
@@ -277,7 +300,3 @@ async function runBenchmark(config, networkName, blockTime = null) {
   console.log(`\n✓ ${networkName} benchmark completed\n`);
   return results;
 }
-
-module.exports = {
-  runBenchmark
-};
