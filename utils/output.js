@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { calculateStats, formatStatsTable } = require('./stats');
 
 /**
  * Convert results to CSV format
@@ -200,5 +201,7 @@ module.exports = {
   writeCSV,
   appendCSV,
   saveResults,
-  printSummaryTable
+  printSummaryTable,
+  calculateStats,
+  formatStatsTable
 };

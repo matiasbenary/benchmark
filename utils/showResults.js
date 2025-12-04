@@ -2,48 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { calculateStats } = require('./stats');
 
-// Función para calcular estadísticas desde un array de latencias
-function calculateStats(latencies) {
-  if (latencies.length === 0) return null;
-
-  const sorted = [...latencies].sort((a, b) => a - b);
-  const sum = sorted.reduce((a, b) => a + b, 0);
-  const avg = sum / sorted.length;
-
-  // Mediana
-  const mid = Math.floor(sorted.length / 2);
-  const median = sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
-
-  // Desviación estándar
-  const variance = sorted.reduce((acc, val) => acc + Math.pow(val - avg, 2), 0) / sorted.length;
-  const stdDev = Math.sqrt(variance);
-
-  // Percentiles
-  const percentile = (p) => {
-    const index = Math.ceil((p / 100) * sorted.length) - 1;
-    return sorted[index];
-  };
-
-  const txPerSecond = avg > 0 ? 1000 / avg : 0;
-
-  return {
-    count: sorted.length,
-    average: Math.round(avg),
-    txPerSecond: Math.round(txPerSecond * 100) / 100,
-    median: Math.round(median),
-    stdDev: Math.round(stdDev),
-    min: sorted[0],
-    max: sorted[sorted.length - 1],
-    p90: percentile(90),
-    p95: percentile(95),
-    p99: percentile(99)
-  };
-}
-
-// Función para leer CSV
 function readCSV(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n');
@@ -71,19 +31,14 @@ function readCSV(filePath) {
     }
   }
 
-  // Calcular estadísticas para cada red
   const stats = {};
   for (const [network, data] of Object.entries(results)) {
-    stats[network] = {
-      ...calculateStats(data.latencies),
-      failures: data.failures
-    };
+    stats[network] = calculateStats(data.latencies, data.failures);
   }
 
   return stats;
 }
 
-// Función para leer JSON
 function readJSON(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const data = JSON.parse(content);
@@ -97,7 +52,6 @@ function readJSON(filePath) {
   return stats;
 }
 
-// Función para mostrar tabla
 function displayTable(stats, fileName) {
   const separator = '='.repeat(120);
   const lineSeparator = '-'.repeat(120);
@@ -135,19 +89,18 @@ function displayTable(stats, fileName) {
   console.log('');
 }
 
-// Función para listar archivos disponibles
 function listAvailableFiles() {
   const resultsDir = path.join(__dirname, 'results');
 
   if (!fs.existsSync(resultsDir)) {
-    console.log('No se encontró el directorio "results"');
+    console.log('Directory "results" not found');
     return [];
   }
 
   const files = fs.readdirSync(resultsDir)
     .filter(f => f.endsWith('.json') || f.endsWith('.csv'))
     .sort()
-    .reverse(); // Más recientes primero
+    .reverse(); // Most recent first
 
   return files;
 }
@@ -157,13 +110,13 @@ function main() {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
-    console.log('\nUso: node showResults.js [archivo]');
-    console.log('\nArchivos disponibles en ./results:');
+    console.log('\nUsage: node showResults.js [file]');
+    console.log('\nAvailable files in ./results:');
 
     const files = listAvailableFiles();
 
     if (files.length === 0) {
-      console.log('  (ningún archivo encontrado)');
+      console.log('  (no files found)');
       process.exit(1);
     }
 
@@ -171,23 +124,23 @@ function main() {
     const csvFiles = files.filter(f => f.endsWith('.csv'));
 
     if (jsonFiles.length > 0) {
-      console.log('\n  Archivos JSON:');
+      console.log('\n  JSON Files:');
       jsonFiles.forEach((f, i) => {
         console.log(`    ${i + 1}. ${f}`);
       });
     }
 
     if (csvFiles.length > 0) {
-      console.log('\n  Archivos CSV:');
+      console.log('\n  CSV Files:');
       csvFiles.forEach((f, i) => {
         console.log(`    ${i + 1}. ${f}`);
       });
     }
 
-    console.log('\nEjemplos:');
+    console.log('\nExamples:');
     console.log(`  node showResults.js results/${files[0]}`);
     console.log('  node showResults.js results/benchmark-2025-12-03T16-46-51-035Z.json');
-    console.log('\nPara mostrar el más reciente:');
+    console.log('\nTo show the most recent:');
     console.log(`  node showResults.js results/${files[0]}`);
     console.log('');
     process.exit(1);
@@ -196,7 +149,7 @@ function main() {
   const filePath = args[0];
 
   if (!fs.existsSync(filePath)) {
-    console.error(`Error: El archivo "${filePath}" no existe`);
+    console.error(`Error: File "${filePath}" does not exist`);
     process.exit(1);
   }
 
@@ -210,7 +163,7 @@ function main() {
   } else if (ext === '.csv') {
     stats = readCSV(filePath);
   } else {
-    console.error('Error: El archivo debe ser .json o .csv');
+    console.error('Error: File must be .json or .csv');
     process.exit(1);
   }
 

@@ -172,6 +172,7 @@ program
   .option('-t, --txs <number>', 'Number of transactions to send', '10')
   .option('-r, --rate <number>', 'Transactions per second (0 = no limit)', '1')
   .option('-c, --confirmations <number>', 'Confirmations for EVM chains (default: varies by network)')
+  .option('-p, --parallel', 'Send transactions in parallel mode (measure finality under load)')
   .option('-o, --out <path>', 'Output file path (without extension, will create .json and .csv)', './results/benchmark')
   .option('--no-confirm', 'Skip confirmation prompt (dangerous for mainnet!)')
   .parse(process.argv);
@@ -278,7 +279,7 @@ async function showWarningAndConfirm(networks, numTxs) {
 /**
  * Run benchmark for a single network
  */
-async function runNetworkBenchmark(network, config, numTxs, rate) {
+async function runNetworkBenchmark(network, config, numTxs, rate, parallel = false) {
   const networkInfo = NETWORKS[network];
   if (!networkInfo) {
     throw new Error(`Unknown network: ${network}`);
@@ -287,7 +288,8 @@ async function runNetworkBenchmark(network, config, numTxs, rate) {
   const networkConfig = {
     ...config,
     numTxs,
-    rate
+    rate,
+    parallel
   };
 
   let results;
@@ -366,6 +368,7 @@ async function main() {
   console.log(`Configuration:`);
   console.log(`  Networks: ${networksToRun.join(', ')}`);
   console.log(`  Transactions per network: ${numTxs}`);
+  console.log(`  Mode: ${options.parallel ? 'PARALLEL' : 'sequential'}`);
   console.log(`  Rate limit: ${rate > 0 ? rate + ' tx/s' : 'unlimited'}`);
   console.log(`  Output: ${options.out || 'none'}\n`);
 
@@ -375,7 +378,7 @@ async function main() {
 
   for (const net of networksToRun) {
     try {
-      const result = await runNetworkBenchmark(net, config[net], numTxs, rate);
+      const result = await runNetworkBenchmark(net, config[net], numTxs, rate, options.parallel);
       networkResults[net] = result;
 
       // Add to summary
